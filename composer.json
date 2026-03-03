@@ -1,0 +1,48 @@
+{
+    "name": "arnaldo-tomo/rotabonita",
+    "description": "Automatically replaces numeric route IDs with YouTube-style public tokens. Zero configuration required.",
+    "keywords": ["laravel", "route", "nanoid", "public-id", "token", "url", "obfuscation"],
+    "homepage": "https://github.com/arnaldo-tomo/rotabonita",
+    "license": "MIT",
+    "type": "library",
+    "authors": [
+        {
+            "name": "Arnaldo Tomo",
+            "homepage": "https://github.com/arnaldo-tomo",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/support": "^10.0|^11.0",
+        "illuminate/database": "^10.0|^11.0",
+        "illuminate/routing": "^10.0|^11.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0|^9.0",
+        "phpunit/phpunit": "^10.0|^11.0",
+        "laravel/pint": "^1.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Rotabonita\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Rotabonita\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Rotabonita\\RotabonitaServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
