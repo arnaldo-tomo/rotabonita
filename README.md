@@ -1,6 +1,15 @@
 # Rotabonita
 
-**Zero-configuration Laravel package that replaces numeric route IDs with YouTube-style public tokens.**
+> Install the package. That's it. Your Laravel routes go from `/posts/1` to `/posts/BYPWtH2qYos` — automatically, with zero configuration, zero traits, zero model changes.
+
+**Rotabonita** is a Laravel 10/11 package that automatically replaces numeric database IDs in your URLs with short, secure, URL-safe public tokens — the same 11-character format YouTube uses for video URLs (e.g. `BYPWtH2qYos`).
+
+It works by intercepting Laravel internally at three points:
+- **Token generation** — assigns a unique `public_id` to every new Eloquent model record automatically
+- **URL generation** — `route('posts.show', $post)` produces `/posts/BYPWtH2qYos` instead of `/posts/1`
+- **Route resolution** — resolves `/posts/BYPWtH2qYos` back to the correct model via `WHERE public_id = ?`
+
+**No traits. No model changes. No config publishing. No manual route edits. Just install.**
 
 [![Latest Stable Version](https://poser.pugx.org/arnaldo-tomo/rotabonita/v/stable)](https://packagist.org/packages/arnaldo-tomo/rotabonita)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
