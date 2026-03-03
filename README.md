@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/banner.png" alt="Rotabonita" width="100%">
+</p>
+
 # Rotabonita
 
 > Install the package. That's it. Your Laravel routes go from `/posts/1` to `/posts/BYPWtH2qYos` — automatically, with zero configuration, zero traits, zero model changes.
