@@ -1,243 +1,376 @@
 # Rotabonita
 
-**Zero-configuration Laravel package that replaces numeric route IDs with YouTube-style public tokens.**
+**Laravel package que substitui automaticamente IDs numéricos nas URLs por tokens seguros no estilo YouTube — sem configuração, sem modificar models, sem mudar a forma de programar.**
 
 [![Latest Stable Version](https://poser.pugx.org/arnaldo-tomo/rotabonita/v/stable)](https://packagist.org/packages/arnaldo-tomo/rotabonita)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![PHP Version](https://img.shields.io/badge/php-%5E8.1-blue)](https://php.net)
-[![Laravel](https://img.shields.io/badge/laravel-10%20%7C%2011-red)](https://laravel.com)
-
-Install it. That's it.
-
-Your routes go from:
-```
-/posts/42 → /posts/BYPWtH2qYos
-```
-
-No traits. No model changes. No config publishing. No manual route edits.
+[![PHP](https://img.shields.io/badge/php-%5E8.1-8892BF)](https://php.net)
+[![Laravel](https://img.shields.io/badge/laravel-10%20%7C%2011-FF2D20)](https://laravel.com)
 
 ---
 
-## Requirements
+## O problema
 
-| Dependency | Version    |
-|------------|------------|
-| PHP        | ^8.1       |
-| Laravel    | ^10.0 or ^11.0 |
+Por padrão, o Laravel expõe os IDs da base de dados directamente nas URLs:
+
+```
+https://meusite.com/posts/1
+https://meusite.com/posts/2
+https://meusite.com/users/47
+```
+
+Isto é problemático porque:
+
+- Qualquer utilizador consegue saber **quantos registos** existem na tua base de dados
+- É fácil **enumerar recursos** simplesmente incrementando o número (`/posts/1`, `/posts/2`, ...)
+- Parece pouco profissional e expõe detalhes internos da aplicação
 
 ---
 
-## Installation
+## A solução
 
-### 1. Require via Composer
+O Rotabonita **intercepta o Laravel internamente** e substitui esses IDs por tokens únicos de 11 caracteres, no mesmo formato usado pelo YouTube para os seus vídeos:
+
+```
+https://meusite.com/posts/BYPWtH2qYos
+https://meusite.com/posts/K9mXpL2rTnQ
+https://meusite.com/users/w4RvNcJ8ZoM
+```
+
+E o melhor: **o teu código não muda absolutamente nada.**
+
+---
+
+## Como é que funciona por dentro
+
+O package actua em três momentos distintos, todos transparentes para o developer:
+
+### 1. Quando crias um registo
+
+```php
+$post = Post::create(['title' => 'Olá mundo']);
+```
+
+O Rotabonita intercepta o evento de criação do Eloquent e gera automaticamente um token único, gravando-o na coluna `public_id` da tabela:
+
+```
+INSERT INTO posts (title, public_id, created_at, ...)
+VALUES ('Olá mundo', 'BYPWtH2qYos', ...)
+```
+
+### 2. Quando geras uma URL
+
+```php
+route('posts.show', $post)
+```
+
+O Rotabonita substitui o gerador de URLs do Laravel e intercepta os parâmetros antes de construir a URL. Em vez de usar o `id` do model, usa o `public_id`:
+
+```
+ANTES:  /posts/1            ← expõe o ID da base de dados
+DEPOIS: /posts/BYPWtH2qYos  ← token opaco e seguro
+```
+
+### 3. Quando um utilizador acede à URL
+
+```
+GET /posts/BYPWtH2qYos
+```
+
+O Rotabonita substitui o sistema de route model binding do Laravel e resolve automaticamente o token para o model correcto:
+
+```sql
+SELECT * FROM posts WHERE public_id = 'BYPWtH2qYos' LIMIT 1
+```
+
+Se o token não existir → HTTP 404, igual ao comportamento padrão do Laravel.
+
+---
+
+## Requisitos
+
+| Dependência | Versão     |
+|-------------|------------|
+| PHP         | ^8.1       |
+| Laravel     | ^10.0 ou ^11.0 |
+
+---
+
+## Instalação
+
+### Passo 1 — Instalar o package
 
 ```bash
 composer require arnaldo-tomo/rotabonita
 ```
 
-Auto-discovery handles registration automatically. No manual provider registration needed.
+O Laravel detecta e regista o package automaticamente (via auto-discovery). Não precisas de adicionar nada ao `config/app.php`.
 
 ---
 
-### 2. Add `public_id` to Your Tables
+### Passo 2 — Adicionar a coluna `public_id` às tabelas
 
-Publish the migration stub:
+O Rotabonita precisa de uma coluna chamada `public_id` em cada tabela que queiras proteger. O package fornece um stub de migration pronto a usar.
+
+**Publicar o stub:**
 
 ```bash
 php artisan vendor:publish --tag=rotabonita-migrations
 ```
 
-This copies a stub migration to `database/migrations/`. Open it and **replace `your_table_name`** with your actual table (e.g., `posts`):
+Isto cria um ficheiro em `database/migrations/`. Abre-o e **muda o nome da tabela** para a tua tabela:
 
 ```php
+// Antes:
+protected string $table = 'your_table_name';
+
+// Depois (exemplo para posts):
 protected string $table = 'posts';
 ```
 
-Then run:
+**Executar a migration:**
 
 ```bash
 php artisan migrate
 ```
 
-Repeat for each table you want to expose via public tokens.
+Repete este processo para cada tabela que queiras proteger.
 
 ---
 
-### 3. Done
+### Passo 3 — Terminado
 
-Create a new model record as usual:
+Não há mais nada a fazer. O package está activo.
+
+---
+
+## Comparação: antes e depois
+
+A seguir tens um exemplo completo de uma aplicação Laravel típica. **Repara que nenhuma linha de código muda.**
+
+### Model
 
 ```php
-$post = Post::create(['title' => 'Hello World']);
-
-echo $post->public_id; // "BYPWtH2qYos"
+// ANTES                              // DEPOIS (igual — nada muda)
+class Post extends Model              class Post extends Model
+{                                     {
+    protected $fillable = [               protected $fillable = [
+        'title',                              'title',
+        'content',                            'content',
+    ];                                    ];
+}                                     }
 ```
 
-Routes resolve automatically:
+### Routes
 
 ```php
-// web.php
-Route::get('/posts/{post}', [PostController::class, 'show']);
-
-// In your browser: GET /posts/BYPWtH2qYos
-// → $post is resolved with WHERE public_id = 'BYPWtH2qYos'
+// ANTES                              // DEPOIS (igual — nada muda)
+Route::resource(                      Route::resource(
+    'posts',                              'posts',
+    PostController::class                 PostController::class
+);                                    );
 ```
 
-URL generation uses `public_id` automatically:
+### Controller
 
 ```php
-route('posts.show', $post); // → https://example.com/posts/BYPWtH2qYos
+// ANTES                              // DEPOIS (igual — nada muda)
+public function show(Post $post)      public function show(Post $post)
+{                                     {
+    return view('posts.show',             return view('posts.show',
+        compact('post')                       compact('post')
+    );                                    );
+}                                     }
+```
+
+### Blade / geração de URLs
+
+```php
+// ANTES
+route('posts.show', $post)
+// → https://meusite.com/posts/1
+
+// DEPOIS (mesmo código — resultado diferente)
+route('posts.show', $post)
+// → https://meusite.com/posts/BYPWtH2qYos  ✅
+```
+
+### Criação de registos
+
+```php
+// ANTES
+$post = Post::create(['title' => 'Olá']);
+// $post->id = 1
+
+// DEPOIS (mesmo código — resultado enriquecido)
+$post = Post::create(['title' => 'Olá']);
+// $post->id = 1
+// $post->public_id = 'BYPWtH2qYos'  ← adicionado automaticamente
 ```
 
 ---
 
-## How It Works
+## O token: formato e segurança
 
-### Token Format
+Os tokens gerados pelo Rotabonita têm as seguintes características:
 
-Tokens are **11 characters** using the URL-safe alphabet `[A-Za-z0-9_-]` (64 characters).  
-Total possible combinations: **64¹¹ ≈ 7.4 × 10¹⁹** — collision probability is effectively zero.
+| Propriedade | Valor |
+|---|---|
+| Comprimento | 11 caracteres |
+| Alfabeto | `A-Z a-z 0-9 _ -` (64 símbolos) |
+| Total de combinações | 64¹¹ ≈ **74 quintiliões** |
+| Geração | `random_bytes()` — criptograficamente seguro |
+| Unicidade | Verificada na base de dados antes de guardar |
+| Formato | Igual aos IDs de vídeos do YouTube |
 
-The generator uses `random_bytes()` with rejection sampling over a 64-character alphabet (a power of 2), which produces **zero modulo bias**.
-
-### Token Generation (Automatic)
-
-Rotabonita registers a global `Model::creating()` listener. On every model creation:
-
-1. Checks if the model's table has a `public_id` column (cached per-table).
-2. If yes and `public_id` is not already set, generates a unique token.
-3. Retries on the (astronomically unlikely) event of a collision — up to 10 times.
-
-### Route Model Binding Override (Automatic)
-
-Rotabonita registers a custom `Router::bind()` resolver for every qualifying model (detected by scanning `app/Models/`). When a route parameter is resolved:
-
-| Parameter value | Resolution |
-|-----------------|------------|
-| Matches token format (`[A-Za-z0-9_-]{11}`) | `WHERE public_id = ?` |
-| Numeric | `WHERE id = ?` (default Laravel behaviour) |
-| Other | `WHERE public_id = ?` (fallback) |
-
-If no record is found, a `ModelNotFoundException` is thrown (→ HTTP 404), identical to Laravel's default behaviour.
+O token não contém nenhuma informação sobre o registo (não é sequencial, não revela a data de criação, não revela a quantidade de registos).
 
 ---
 
-## Backfilling Existing Records
+## Comportamento em detalhe
 
-If you added `public_id` to a table that already has rows, back-fill them with a simple Tinker command:
+### O que acontece se a tabela não tiver `public_id`?
 
-```php
+Nada. O Rotabonita verifica a existência da coluna antes de agir. Se não existir, o comportamento é 100% o padrão do Laravel. **O teu código existente não quebra.**
+
+### O que acontece se eu passar um ID numérico na URL?
+
+O Rotabonita resolve por ID numérico normalmente, como o Laravel faria por padrão:
+
+```
+GET /posts/1        → resolves pelo id = 1   (compatibilidade)
+GET /posts/BYPWtH2qYos → resolves pelo public_id  (comportamento novo)
+```
+
+### O que acontece se o token não existir?
+
+É lançada uma `ModelNotFoundException`, que o Laravel converte automaticamente em HTTP 404 — exactamente como aconteceria com um ID inválido.
+
+### E as rotas com cache (`php artisan route:cache`)?
+
+Totalmente compatível. O sistema de route binding é registado de forma compatível com a cache de rotas do Laravel.
+
+---
+
+## Backfill: preencher registos existentes
+
+Se adicionaste a coluna `public_id` a uma tabela que já tem dados, preenche os registos existentes com este comando no Tinker:
+
+```bash
 php artisan tinker
+```
 
->>> App\Models\Post::whereNull('public_id')->each(function ($post) {
-...     $gen = app(\Rotabonita\TokenGenerator::class);
-...     $post->public_id = $gen->generateUnique($post);
-...     $post->save();
+```php
+>>> $generator = app(\Rotabonita\TokenGenerator::class);
+>>> App\Models\Post::whereNull('public_id')->each(function ($post) use ($generator) {
+...     $post->public_id = $generator->generateUnique($post);
+...     $post->saveQuietly(); // saveQuietly evita re-disparar eventos
 ... });
 ```
 
 ---
 
-## Advanced: Manual Model Registration
+## Avançado: models em directórios não convencionais
 
-If your models live outside `app/Models/` or `app/`, register them manually in a service provider:
-
-```php
-// In AppServiceProvider::register()
-$this->app->bind('rotabonita.models', fn() => [
-    \App\Domain\Blog\Post::class,
-    \App\Domain\Commerce\Product::class,
-]);
-```
-
----
-
-## Advanced: Custom Token Length
-
-By default tokens are 11 characters. To use a different length, extend `TokenGenerator`:
+Por padrão, o Rotabonita procura models em `app/Models/` e `app/`. Se os teus models estão noutro local, podes registá-los manualmente no teu `AppServiceProvider`:
 
 ```php
-use Rotabonita\TokenGenerator;
+// app/Providers/AppServiceProvider.php
 
-class MyTokenGenerator extends TokenGenerator
+public function register(): void
 {
-    public function generate(int $length = 16): string
-    {
-        return parent::generate($length);
-    }
+    $this->app->bind('rotabonita.models', fn() => [
+        \App\Domain\Blog\Post::class,
+        \App\Domain\Commerce\Product::class,
+        \App\Domain\Users\Customer::class,
+    ]);
 }
 ```
 
-Then rebind in your service provider:
+---
+
+## Avançado: comprimento do token personalizado
+
+O comprimento padrão é 11 caracteres (igual ao YouTube). Para usar um comprimento diferente, substitui o `TokenGenerator` no container:
 
 ```php
-$this->app->singleton(TokenGenerator::class, fn() => new MyTokenGenerator());
+// app/Providers/AppServiceProvider.php
+
+use Rotabonita\TokenGenerator;
+
+public function register(): void
+{
+    $this->app->singleton(TokenGenerator::class, function () {
+        return new class extends TokenGenerator {
+            public function generate(int $length = 16): string
+            {
+                return parent::generate($length); // tokens de 16 chars
+            }
+        };
+    });
+}
 ```
 
 ---
 
-## Security Considerations
-
-- **Never expose primary keys** (`id`) in your URLs. Rotabonita is designed for exactly this.
-- Tokens are not sequential and carry no information about the record count, creation time, or ordering.
-- The `public_id` column has a **database-level UNIQUE constraint** — enforced even if the application layer fails.
-
----
-
-## Package Structure
+## Estrutura do package
 
 ```
 rotabonita/
-├── composer.json
-├── README.md
+│
+├── composer.json                          ← Metadados e auto-discovery
+├── README.md                              ← Esta documentação
+│
 ├── database/
 │   └── migrations/
-│       └── add_public_id_to_table.php.stub
+│       └── add_public_id_to_table.php.stub  ← Stub de migration publicável
+│
 └── src/
-    ├── RotabonitaServiceProvider.php   # Auto-discovered. Wires everything.
-    ├── TokenGenerator.php              # Cryptographic NanoID-style generator.
-    └── RouteBindingOverride.php        # Global route model binding + model discovery.
+    ├── RotabonitaServiceProvider.php      ← Ponto de entrada. Regista tudo automaticamente.
+    ├── TokenGenerator.php                 ← Gerador de tokens NanoID criptograficamente seguro.
+    ├── RouteBindingOverride.php           ← Detecção de models + override do route binding.
+    └── RotabonitaUrlGenerator.php         ← Override do UrlGenerator para geração de URLs.
+```
+
+### Como os ficheiros se ligam entre si
+
+```
+Instalação do package
+        ↓
+RotabonitaServiceProvider (auto-descoberto)
+        ├── Regista TokenGenerator como singleton
+        ├── Regista RouteBindingOverride como singleton
+        ├── Substitui o UrlGenerator do Laravel → route() usa public_id
+        ├── Regista ouvinte global Model::creating → gera token em cada criação
+        └── Regista route bindings → resolve tokens em public_id nas rotas
 ```
 
 ---
 
-## Example: Full Route Setup
+## Publicar no Packagist
 
-```php
-// routes/web.php
-use App\Http\Controllers\PostController;
+1. Faz push do repositório para o GitHub: `https://github.com/arnaldo-tomo/rotabonita`
+2. Cria uma conta em [packagist.org](https://packagist.org) e vai a **Submit Package**
+3. Cola o URL do repositório e clica **Check** → **Submit**
+4. O package fica disponível como `arnaldo-tomo/rotabonita`
 
-Route::resource('posts', PostController::class);
-```
-
-```php
-// app/Http/Controllers/PostController.php
-public function show(Post $post): View
-{
-    // $post is already resolved — no findOrFail() needed.
-    return view('posts.show', compact('post'));
-}
-```
-
-```php
-// In any Blade template:
-<a href="{{ route('posts.show', $post) }}">
-    Read "{{ $post->title }}"
-</a>
-{{-- renders: /posts/BYPWtH2qYos --}}
-```
+Para actualizações automáticas sempre que fizeres push, configura o webhook:
+- GitHub → Settings → Webhooks → Add webhook
+- URL: `https://packagist.org/api/github?username=arnaldo-tomo`
+- Content type: `application/json`
+- Eventos: `Just the push event`
 
 ---
 
-## Compatibility
+## Compatibilidade
 
-| Laravel | PHP   | Status  |
-|---------|-------|---------|
-| 10.x    | 8.1+  | ✅ Supported |
-| 11.x    | 8.2+  | ✅ Supported |
+| Laravel | PHP   | Estado       |
+|---------|-------|--------------|
+| 10.x    | 8.1+  | ✅ Suportado |
+| 11.x    | 8.2+  | ✅ Suportado |
 
 ---
 
-## License
+## Licença
 
 MIT © [Arnaldo Tomo](https://github.com/arnaldo-tomo)
