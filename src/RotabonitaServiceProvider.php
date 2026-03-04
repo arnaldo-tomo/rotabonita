@@ -81,10 +81,18 @@ final class RotabonitaServiceProvider extends ServiceProvider
             }
 
             // Perform an early SPA-friendly Redirect before resolving Controller Action
-            // Enforces Obfuscation rules flawlessly even when Devs hardcode IDs.
             if ($needsRedirect && $route->getName()) {
+                $targetUrl = redirect()->route($route->getName(), $newParameters + $request->query())->getTargetUrl();
+                
+                // Natively support Inertia.js client-side redirection
+                if ($request->header('X-Inertia')) {
+                    throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                        response('', 409, ['X-Inertia-Location' => $targetUrl])
+                    );
+                }
+
                 throw new \Illuminate\Http\Exceptions\HttpResponseException(
-                    redirect()->route($route->getName(), $newParameters + $request->query(), 308)
+                    redirect($targetUrl, 308)
                 );
             }
         });
