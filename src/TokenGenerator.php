@@ -15,69 +15,41 @@ use Illuminate\Database\Eloquent\Model;
  */
 final class TokenGenerator
 {
-    /**
-     * URL-safe alphabet: 64 characters (A-Z, a-z, 0-9, _, -).
-     */
     private const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
-
-    /**
-     * Default token length (matches YouTube's public video IDs).
-     */
     public const TOKEN_LENGTH = 11;
 
-    public function __construct(
-        private readonly string $appKey
-    ) {}
+    private Hashids $hashids;
 
-    /**
-     * Encode a raw numeric ID into an 11-char token directly given the Model class namespace.
-     *
-     * @param  int|string  $id
-     * @param  class-string<Model>  $modelClass
-     * @return string
-     */
-    public function encodeId(int|string $id, string $modelClass): string
+    public function __construct(string $appKey)
     {
-        $hashids = $this->getHasherForClass($modelClass);
-
-        return $hashids->encode((int) $id);
+        // Global salt to handle obfuscation uniformly across all models and integer parameters
+        $salt = substr(md5($appKey . 'rotabonita_global_salt'), 0, 16);
+        $this->hashids = new Hashids($salt, self::TOKEN_LENGTH, self::ALPHABET);
     }
 
     /**
-     * Encode a model's numeric primary key into an 11-char token.
+     * Encode a raw numeric integer or an Eloquent model.
      *
-     * @param  Model  $model
+     * @param  int|string|Model  $target
      * @return string
      */
-    public function encode(Model $model): string
+    public function encode(int|string|Model $target): string
     {
-        return $this->encodeId($model->getKey(), get_class($model));
+        $id = $target instanceof Model ? $target->getKey() : $target;
+
+        return $this->hashids->encode((int) $id);
     }
 
     /**
-     * Decode an 11-char token back to a numeric ID for a specific model class.
+     * Decode an 11-char token back to a numeric ID.
      *
      * @param  string  $token
-     * @param  class-string<Model> $modelClass
      * @return int|null
      */
-    public function decode(string $token, string $modelClass): ?int
+    public function decode(string $token): ?int
     {
-        $hashids = $this->getHasherForClass($modelClass);
-
-        $decoded = $hashids->decode($token);
+        $decoded = $this->hashids->decode($token);
 
         return $decoded[0] ?? null;
-    }
-
-    /**
-     * Ensure tokens are unique per Eloquent Model by appending the class name
-     * to the salt. This guarantees Post #1 and User #1 produce different tokens.
-     */
-    private function getHasherForClass(string $modelClass): Hashids
-    {
-        $salt = substr(md5($this->appKey . $modelClass), 0, 16);
-
-        return new Hashids($salt, self::TOKEN_LENGTH, self::ALPHABET);
     }
 }

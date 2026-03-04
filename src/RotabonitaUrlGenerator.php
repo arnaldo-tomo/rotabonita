@@ -17,36 +17,33 @@ use Illuminate\Support\Arr;
 final class RotabonitaUrlGenerator extends UrlGenerator
 {
     /**
-     * Replaces standard keys natively fetched via getRouteKey() with obfuscated tokens.
+     * Replaces standard integers and keys fetched via getRouteKey() with obfuscated tokens.
      */
     public function formatParameters($parameters): array
     {
         $parameters = Arr::wrap($parameters);
-
-        $generator = null;
+        $generator = app(TokenGenerator::class);
 
         foreach ($parameters as $key => $parameter) {
-            if ($parameter instanceof Model && $this->shouldObfuscate($parameter)) {
-                $generator ??= app(TokenGenerator::class);
-                // Substitute numeric key for secure Hashids 11-char string
+            if ($parameter instanceof Model && $parameter instanceof UrlRoutable) {
+                // Determine if model uses an incrementing integer ID
+                if ($parameter->getKeyType() === 'int' && $parameter->getIncrementing()) {
+                    $parameters[$key] = $generator->encode($parameter->getKey());
+                    continue;
+                }
+                $parameters[$key] = $parameter->getRouteKey();
+            } 
+            // Encode ANY raw integer found in route parameters! This guarantees SPA/Inertia compatibility
+            // if Developer passes explicit numbers `route('users', 16)` missing Model type hint!
+            elseif (is_int($parameter) || (is_string($parameter) && ctype_digit($parameter))) {
                 $parameters[$key] = $generator->encode($parameter);
-            } elseif ($parameter instanceof UrlRoutable) {
-                // Default fallback for unmatched models or non-integer models (e.g UUIDs).
+            } 
+            // Fallback for native string keys natively handled by Laravel UrlGenerator
+            elseif ($parameter instanceof UrlRoutable) {
                 $parameters[$key] = $parameter->getRouteKey();
             }
         }
 
         return $parameters;
-    }
-
-    /**
-     * Determines if a model primary key is eligible for Obfuscation.
-     */
-    private function shouldObfuscate(Model $model): bool
-    {
-        // We solely obfuscate integers since Hashids algorithms rely tightly on numbers.
-        return $model->getKeyType() === 'int'
-            && $model->getIncrementing()
-            && !empty($model->getKey());
     }
 }
