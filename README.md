@@ -37,6 +37,18 @@ Your entire Laravel application now magically uses YouTube-style tokens for all 
 
 ---
 
+## Uninstallation
+
+Because Rotabonita doesn't modify your database or publish any configuration files, removing it is completely safe and instantaneous:
+
+```bash
+composer remove arnaldo-tomo/rotabonita
+```
+
+All your routes will instantly revert back to using standard numeric IDs (`/posts/1`) without any broken data.
+
+---
+
 ## What changes?
 
 **Before** installing Rotabonita:

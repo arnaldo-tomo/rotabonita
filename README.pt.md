@@ -37,6 +37,18 @@ A tua aplicação Laravel utilizará agora magicamente tokens estilo-YouTube par
 
 ---
 
+## Desinstalação
+
+Como o Rotabonita não modifica a tua base de dados nem publica ficheiros de configuração, removê-lo é 100% seguro e instantâneo:
+
+```bash
+composer remove arnaldo-tomo/rotabonita
+```
+
+As tuas rotas voltarão imediatamente a usar os IDs numéricos normais (`/posts/1`) sem qualquer perda de dados ou links corrompidos internamente.
+
+---
+
 ## O que muda
 
 **Antes** de instalar o Rotabonita:
