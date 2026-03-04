@@ -30,6 +30,20 @@ final class TokenGenerator
     ) {}
 
     /**
+     * Encode a raw numeric ID into an 11-char token directly given the Model class namespace.
+     *
+     * @param  int|string  $id
+     * @param  class-string<Model>  $modelClass
+     * @return string
+     */
+    public function encodeId(int|string $id, string $modelClass): string
+    {
+        $hashids = $this->getHasherForClass($modelClass);
+
+        return $hashids->encode((int) $id);
+    }
+
+    /**
      * Encode a model's numeric primary key into an 11-char token.
      *
      * @param  Model  $model
@@ -37,9 +51,7 @@ final class TokenGenerator
      */
     public function encode(Model $model): string
     {
-        $hashids = $this->getHasherForClass(get_class($model));
-
-        return $hashids->encode($model->getKey());
+        return $this->encodeId($model->getKey(), get_class($model));
     }
 
     /**

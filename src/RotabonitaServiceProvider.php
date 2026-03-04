@@ -58,11 +58,15 @@ final class RotabonitaServiceProvider extends ServiceProvider
     /**
      * Traps resolution precisely after a Route explicitly matches but BEFORE parameters
      * are injected into controllers via SubstituteBindings.
+     * 
+     * If a raw numeric ID is accessed directly (e.g. from an SPA/Inertia frontend), 
+     * we intercept and throw a 308 redirect to the obfuscated token URL.
      */
     private function registerRouteDecoding(): void
     {
         Event::listen(RouteMatched::class, function (RouteMatched $event) {
             $route = $event->route;
+            $request = $event->request;
             $parameters = $route->parameters();
 
             // Discovers route parameters requesting Eloquent Model Types in Signature
@@ -71,6 +75,9 @@ final class RotabonitaServiceProvider extends ServiceProvider
             if (empty($signatureParameters)) {
                 return;
             }
+
+            $needsRedirect = false;
+            $newParameters = $parameters;
 
             /** @var TokenGenerator $generator */
             $generator = $this->app->make(TokenGenerator::class);
@@ -83,16 +90,30 @@ final class RotabonitaServiceProvider extends ServiceProvider
                     $value = $parameters[$paramName];
                     $modelClass = $parameter->getType() ? $parameter->getType()->getName() : null;
 
-                    // Execute decoder ONLY if parameter strictly resembles obfuscated tokens
-                    if (is_string($value) && $modelClass && $this->isObfuscatedToken($value)) {
+                    if (!$modelClass) {
+                        continue;
+                    }
+
+                    // 1. If an SPA sends a raw numeric ID (e.g /events/11), intercept and auto-redirect
+                    if (is_numeric($value) && $request->isMethod('GET')) {
+                        $newParameters[$paramName] = $generator->encodeId($value, $modelClass);
+                        $needsRedirect = true;
+                    } 
+                    // 2. If it's already an obfuscated token, safely decode it for Backend DB resolution
+                    elseif (is_string($value) && $this->isObfuscatedToken($value)) {
                         $decodedId = $generator->decode($value, $modelClass);
                         if ($decodedId !== null) {
-                            // Flawlessly reverts route variable to typical numeric ID
-                            // ensuring standard query executes normally behind-the-scenes
                             $route->setParameter($paramName, $decodedId);
                         }
                     }
                 }
+            }
+
+            // Perform an early SPA-friendly Redirect before resolving Controller Action
+            if ($needsRedirect && $route->getName()) {
+                throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                    redirect()->route($route->getName(), $newParameters + $request->query(), 308)
+                );
             }
         });
     }
