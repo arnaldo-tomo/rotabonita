@@ -4,128 +4,68 @@ declare(strict_types=1);
 
 namespace Rotabonita;
 
+use Hashids\Hashids;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * NanoID-style URL-safe token generator.
+ * NanoID-style URL-safe token generator using Hashids.
  *
- * Generates cryptographically strong, URL-safe tokens using a custom
- * alphabet identical to YouTube's video ID format. No external dependencies.
+ * It transparently obfuscates numeric auto-incrementing IDs into 11-char strings
+ * mimicking YouTube video IDs, and predictably decodes them back.
  */
 final class TokenGenerator
 {
     /**
-     * URL-safe alphabet: A-Z, a-z, 0-9, underscore, hyphen.
-     * 64 characters total — a power of 2, enabling bias-free generation.
+     * URL-safe alphabet: 64 characters (A-Z, a-z, 0-9, _, -).
      */
     private const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
 
     /**
      * Default token length (matches YouTube's public video IDs).
      */
-    private const DEFAULT_LENGTH = 11;
+    public const TOKEN_LENGTH = 11;
+
+    public function __construct(
+        private readonly string $appKey
+    ) {}
 
     /**
-     * Maximum number of attempts before giving up on collision avoidance.
+     * Encode a model's numeric primary key into an 11-char token.
+     *
+     * @param  Model  $model
+     * @return string
      */
-    private const MAX_ATTEMPTS = 10;
-
-    /**
-     * Generate a single cryptographically random, URL-safe token.
-     *
-     * Uses the rejection sampling (unbiased) method over a 64-char alphabet.
-     * The mask is 0x3F (63), since 64 = 2^6, so no modulo bias occurs.
-     *
-     * @param  int  $length  Desired token length.
-     * @return string        Generated token.
-     *
-     * @throws \RuntimeException If secure random bytes cannot be generated.
-     */
-    public function generate(int $length = self::DEFAULT_LENGTH): string
+    public function encode(Model $model): string
     {
-        $alphabetSize = strlen(self::ALPHABET);
-        $mask = $alphabetSize - 1; // 0x3F = 63, since alphabetSize = 64
+        $hashids = $this->getHasherForClass(get_class($model));
 
-        $token = '';
-        // We request more bytes than needed to reduce re-rolls in the loop.
-        $bytesNeeded = (int) ceil($length * 1.3);
-
-        while (strlen($token) < $length) {
-            $randomBytes = random_bytes($bytesNeeded);
-
-            for ($i = 0; $i < $bytesNeeded && strlen($token) < $length; $i++) {
-                $index = ord($randomBytes[$i]) & $mask;
-                $token .= self::ALPHABET[$index];
-            }
-        }
-
-        return $token;
+        return $hashids->encode($model->getKey());
     }
 
     /**
-     * Generate a unique token for a given Eloquent model, retrying on collision.
+     * Decode an 11-char token back to a numeric ID for a specific model class.
      *
-     * Checks database uniqueness against the `public_id` column before returning.
-     * In practice, collisions are astronomically rare (alphabet^length = 64^11 ≈ 7.4×10^19).
-     *
-     * @param  Model  $model    The Eloquent model instance needing a token.
-     * @param  int    $length   Desired token length.
-     * @return string           A token guaranteed to be unique in the model's table.
-     *
-     * @throws \RuntimeException If a unique token cannot be generated within MAX_ATTEMPTS.
+     * @param  string  $token
+     * @param  class-string<Model> $modelClass
+     * @return int|null
      */
-    public function generateUnique(Model $model, int $length = self::DEFAULT_LENGTH): string
+    public function decode(string $token, string $modelClass): ?int
     {
-        $attempts = 0;
+        $hashids = $this->getHasherForClass($modelClass);
 
-        do {
-            if ($attempts >= self::MAX_ATTEMPTS) {
-                throw new \RuntimeException(
-                    sprintf(
-                        '[Rotabonita] Failed to generate a unique public_id for [%s] after %d attempts.',
-                        get_class($model),
-                        self::MAX_ATTEMPTS
-                    )
-                );
-            }
+        $decoded = $hashids->decode($token);
 
-            $token = $this->generate($length);
-            $attempts++;
-        } while ($this->tokenExists($model, $token));
-
-        return $token;
+        return $decoded[0] ?? null;
     }
 
     /**
-     * Check whether a given token already exists in the model's table.
-     *
-     * @param  Model   $model  The Eloquent model.
-     * @param  string  $token  The candidate token.
-     * @return bool            True if the token is already taken.
+     * Ensure tokens are unique per Eloquent Model by appending the class name
+     * to the salt. This guarantees Post #1 and User #1 produce different tokens.
      */
-    private function tokenExists(Model $model, string $token): bool
+    private function getHasherForClass(string $modelClass): Hashids
     {
-        return $model->newQueryWithoutScopes()
-            ->where('public_id', $token)
-            ->exists();
-    }
+        $salt = substr(md5($this->appKey . $modelClass), 0, 16);
 
-    /**
-     * Validate whether a given string matches the public_id token format.
-     *
-     * This is used by the route binder to determine if a route parameter
-     * should be resolved via public_id lookup vs. a plain numeric ID lookup.
-     *
-     * @param  string  $value   The route parameter value.
-     * @param  int     $length  Expected token length.
-     * @return bool             True if the value looks like a valid token.
-     */
-    public function isValidToken(string $value, int $length = self::DEFAULT_LENGTH): bool
-    {
-        if (strlen($value) !== $length) {
-            return false;
-        }
-
-        return (bool) preg_match('/^[A-Za-z0-9_\-]+$/', $value);
+        return new Hashids($salt, self::TOKEN_LENGTH, self::ALPHABET);
     }
 }

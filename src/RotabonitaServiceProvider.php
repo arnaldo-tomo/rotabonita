@@ -4,178 +4,108 @@ declare(strict_types=1);
 
 namespace Rotabonita;
 
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Routing\Router;
+use Illuminate\Routing\Events\RouteMatched;
+use Illuminate\Routing\ImplicitRouteBinding;
 use Illuminate\Routing\UrlGenerator;
-use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 /**
  * Rotabonita Service Provider.
  *
- * Bootstraps the entire package with zero configuration:
- *  1. Registers the TokenGenerator singleton.
- *  2. Registers the RouteBindingOverride singleton.
- *  3. Replaces Laravel's UrlGenerator to use public_id in route() calls.
- *  4. Hooks into Eloquent model creation to auto-assign public_id tokens.
- *  5. Overrides route model binding globally for all qualifying models.
- *  6. Publishes the migration stub.
+ * Bootstraps the entire package with ZERO configuration:
+ *  1. Registers TokenGenerator using the application secret key.
+ *  2. Replaces Laravel's UrlGenerator to obfuscate IDs in generated URLs.
+ *  3. Listens to `RouteMatched` to decode obfuscated IDs before implicit resolution.
  */
 final class RotabonitaServiceProvider extends ServiceProvider
 {
-    /**
-     * Register package bindings into the service container.
-     *
-     * This runs before boot(), so services registered here are available
-     * to other providers during their own boot phase.
-     */
     public function register(): void
     {
-        $this->app->singleton(TokenGenerator::class, fn () => new TokenGenerator());
-
-        $this->app->singleton(RouteBindingOverride::class, function () {
-            return new RouteBindingOverride(
-                $this->app->make(TokenGenerator::class)
-            );
+        // 1. Instantiates encoder configured by App environment
+        $this->app->singleton(TokenGenerator::class, function (Application $app) {
+            $key = $app['config']->get('app.key', 'rotabonita-fallback-key');
+            return new TokenGenerator($key);
         });
 
+        // 2. Safely swap standard Route Generator overriding Laravel Defaults
         $this->registerUrlGenerator();
     }
 
-    /**
-     * Bootstrap package services.
-     *
-     * Execution order:
-     *  1. Publish migration stubs.
-     *  2. Register the global Eloquent "creating" listener for token generation.
-     *  3. Register the route model binding overrides (deferred until after routing bootstrap).
-     */
     public function boot(): void
     {
-        $this->publishMigrations();
-        $this->registerTokenListener();
-        $this->registerRouteBindings();
+        // 3. Registers Transparent Implicit Resolution Decoder
+        $this->registerRouteDecoding();
     }
 
     /**
-     * Replace Laravel's UrlGenerator with Rotabonita's version.
-     *
-     * This is the key to making `route('posts.show', $post)` automatically
-     * produce `/posts/BYPWtH2qYos` instead of `/posts/1` — with ZERO changes
-     * required from the developer.
-     *
-     * We use `extend('url', ...)` which Laravel calls at the moment the
-     * `url` service is first resolved from the container. The returned
-     * RotabonitaUrlGenerator then becomes the application-wide URL generator.
-     *
-     * All subsequent calls to `setSessionResolver()`, `setKeyResolver()`, etc.
-     * from other service providers are called on OUR generator (since it's
-     * now the `url` singleton), so signed routes and all other features
-     * continue to work exactly as before.
+     * Intercepts `route(...)` rendering. Overrides UrlGenerator singleton so that any 
+     * future service bindings utilize Rotabonita's URL parameters format mechanism.
      */
     private function registerUrlGenerator(): void
     {
-        $this->app->extend('url', function (UrlGenerator $url, $app) {
+        $this->app->extend('url', function (UrlGenerator $url, Application $app) {
             return new RotabonitaUrlGenerator(
                 $app['router']->getRoutes(),
                 $app['request'],
-                $app['config']['app.asset_url'] ?? null
+                $app['config']->get('app.asset_url')
             );
         });
     }
 
     /**
-     * Publish the migration stub to the host application.
-     *
-     * Developers can run:
-     *   php artisan vendor:publish --tag=rotabonita-migrations
-     *
-     * This creates a timestamped migration that adds `public_id` to any table.
+     * Traps resolution precisely after a Route explicitly matches but BEFORE parameters
+     * are injected into controllers via SubstituteBindings.
      */
-    private function publishMigrations(): void
+    private function registerRouteDecoding(): void
     {
-        if ($this->app->runningInConsole()) {
-            $this->publishes(
-                [__DIR__ . '/../database/migrations/' => database_path('migrations/')],
-                'rotabonita-migrations'
-            );
-        }
-    }
+        Event::listen(RouteMatched::class, function (RouteMatched $event) {
+            $route = $event->route;
+            $parameters = $route->parameters();
 
-    /**
-     * Register a global Eloquent "creating" listener.
-     *
-     * This listener fires on every model creation across the entire application.
-     * It checks:
-     *  1. Does the model's table have a `public_id` column?
-     *  2. Is the `public_id` not already set?
-     *
-     * If both conditions are true, it generates a unique token and assigns it.
-     * This approach requires NO trait, NO model modification.
-     */
-    private function registerTokenListener(): void
-    {
-        /** @var TokenGenerator $generator */
-        $generator = $this->app->make(TokenGenerator::class);
-
-        Model::creating(function (Model $model) use ($generator): void {
-            // Skip if the table doesn't have a public_id column.
-            // We use a static in-memory cache to avoid repeated Schema calls.
-            if (! $this->modelHasPublicId($model)) {
+            // Discovers route parameters requesting Eloquent Model Types in Signature
+            $signatureParameters = $route->signatureParameters(['subClassOf' => Model::class]);
+            
+            if (empty($signatureParameters)) {
                 return;
             }
 
-            // Skip if the developer has already set a public_id explicitly.
-            if (! empty($model->public_id)) {
-                return;
-            }
+            /** @var TokenGenerator $generator */
+            $generator = $this->app->make(TokenGenerator::class);
 
-            $model->public_id = $generator->generateUnique($model);
+            foreach ($signatureParameters as $parameter) {
+                // Determine parameter name mapped according to original framework heuristics
+                $paramName = ImplicitRouteBinding::getParameterName($parameter->getName(), $parameters);
+
+                if ($paramName && isset($parameters[$paramName])) {
+                    $value = $parameters[$paramName];
+                    $modelClass = $parameter->getType() ? $parameter->getType()->getName() : null;
+
+                    // Execute decoder ONLY if parameter strictly resembles obfuscated tokens
+                    if (is_string($value) && $modelClass && $this->isObfuscatedToken($value)) {
+                        $decodedId = $generator->decode($value, $modelClass);
+                        if ($decodedId !== null) {
+                            // Flawlessly reverts route variable to typical numeric ID
+                            // ensuring standard query executes normally behind-the-scenes
+                            $route->setParameter($paramName, $decodedId);
+                        }
+                    }
+                }
+            }
         });
     }
 
     /**
-     * Register route model bindings for all qualifying Eloquent models.
-     *
-     * Uses `afterResolving` to defer registration until the Router is fully
-     * booted, which ensures all routes from the application and other packages
-     * are already registered before our bindings are applied.
-     *
-     * This also means the package is compatible with route caching.
+     * Safety heuristic distinguishing ordinary string variables from encrypted tokens.
      */
-    private function registerRouteBindings(): void
+    private function isObfuscatedToken(string $value): bool
     {
-        $this->app->afterResolving(Router::class, function (Router $router): void {
-            /** @var RouteBindingOverride $override */
-            $override = $this->app->make(RouteBindingOverride::class);
-            $override->register($router);
-        });
-    }
-
-    /**
-     * Check whether a model's database table contains the `public_id` column.
-     *
-     * Caches results in a static array keyed by table name to avoid redundant
-     * Schema::hasColumn() calls on every model creation event.
-     *
-     * @param  Model  $model
-     * @return bool
-     */
-    private function modelHasPublicId(Model $model): bool
-    {
-        static $cache = [];
-
-        $table = $model->getTable();
-
-        if (! array_key_exists($table, $cache)) {
-            try {
-                $cache[$table] = Schema::hasColumn($table, 'public_id');
-            } catch (\Throwable) {
-                // Schema not reachable (e.g., during unit tests without DB).
-                $cache[$table] = false;
-            }
+        if (strlen($value) !== TokenGenerator::TOKEN_LENGTH) {
+            return false;
         }
 
-        return $cache[$table];
+        return (bool) preg_match('/^[A-Za-z0-9_\-]+$/', $value);
     }
 }

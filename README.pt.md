@@ -4,14 +4,15 @@
 
 # Rotabonita
 
-> Instala o package. É tudo. As tuas rotas Laravel passam automaticamente de `/posts/1` para `/posts/BYPWtH2qYos` — sem configuração, sem traits, sem modificar models.
+> Instala o package. É tudo. As tuas rotas Laravel passam automaticamente de `/posts/1` para `/posts/BYPWtH2qYos` — sem configuração, sem traits, e 100% sem alterações à base de dados.
 
 **Rotabonita** é um package Laravel 10/11 que substitui automaticamente os IDs numéricos da base de dados nas URLs por tokens curtos, seguros e legíveis — o mesmo formato de 11 caracteres que o YouTube usa nos seus vídeos (ex: `BYPWtH2qYos`).
 
-Funciona interceptando o Laravel internamente em três pontos:
-- **Geração de token** — atribui um `public_id` único a cada novo registo Eloquent automaticamente
-- **Geração de URL** — `route('posts.show', $post)` produz `/posts/BYPWtH2qYos` em vez de `/posts/1`
-- **Resolução de rota** — resolve `/posts/BYPWtH2qYos` para o model correcto via `WHERE public_id = ?`
+Funciona dinamicamente em memória:
+- **Zero Colunas na Base de Dados** — Não necessita de criar ou adicionar colunas `public_id` às tabelas.
+- **Zero Migrações** — Nada de Artisan commands nem de schemas. É instantâneo.
+- **Geração de URL** — `route('posts.show', $post)` produz logicamente `/posts/BYPWtH2qYos` convertendo em tempo-real.
+- **Resolução de rota** — Converte `/posts/BYPWtH2qYos` invisivelmente de volta para `/posts/1` antes da query Eloquent iniciar.
 
 **Sem traits. Sem modificar models. Sem publicar configurações. Sem alterar rotas. Só instalar.**
 
@@ -30,25 +31,9 @@ Funciona interceptando o Laravel internamente em três pontos:
 composer require arnaldo-tomo/rotabonita
 ```
 
-Publica e configura a migration para cada tabela que queres proteger:
+**Terminado. Nenhuma configuração adicional, nem comandos publicar necessários.**
 
-```bash
-php artisan vendor:publish --tag=rotabonita-migrations
-```
-
-Abre o ficheiro publicado em `database/migrations/` e define o nome da tua tabela:
-
-```php
-protected string $table = 'posts'; // ← muda aqui
-```
-
-Executa a migration:
-
-```bash
-php artisan migrate
-```
-
-**Terminado. Não é necessária mais nenhuma configuração.**
+A tua aplicação Laravel utilizará agora magicamente tokens estilo-YouTube para todos os Models baseados em inteiros incrementais de imediato.
 
 ---
 
@@ -74,32 +59,32 @@ O teu código fica **exactamente igual**. Models, rotas, controllers, templates 
 
 ## Como funciona
 
-O Rotabonita intercepta o Laravel em três pontos automaticamente:
+Rotabonita encripta deterministicamente utilizando Hashids gerados silenciosamente pela secret key original da tua app (`APP_KEY`) em sintonia com a Namespace do Model. Isto garante que:
+1. Trabalha de forma ultrarrápida (O(1)) através da memória — poupando as habituais queries ou lookups secundários.
+2. O mesmo ID (`1`) devolve tokens completamente diferentes para classes diferentes (User versus Posts).
+3. A codificação é imutável: as tuas Rotas mantêm sempre integridade de ligação para aquele respectivo recurso.
 
-**1 — Na criação do model**
+O package intercepta o Laravel no Kernel:
+
+**1 — Na geração de URLs**
 ```php
-Post::create(['title' => 'Olá']); // → public_id = 'BYPWtH2qYos' atribuído automaticamente
+route('posts.show', $post); // Substitui a URL Generator Core silenciosamente (exibe BYPWtH2qYos)
 ```
 
-**2 — Na geração de URLs**
-```php
-route('posts.show', $post); // → /posts/BYPWtH2qYos  (não /posts/1)
+**2 — Na resolução da rota (antes da Invocação das Actions)**
+```
+Reverte: BYPWtH2qYos → 1
+GET /posts/BYPWtH2qYos → Resolve exactamente como se usasse /posts/1 nativamente.
 ```
 
-**3 — Na resolução da rota**
-```
-GET /posts/BYPWtH2qYos → SELECT * FROM posts WHERE public_id = 'BYPWtH2qYos'
-GET /posts/1           → SELECT * FROM posts WHERE id = 1  (fallback)
-```
-
-Se o registo não existir → HTTP 404, igual ao comportamento padrão do Laravel.
+Se o acesso for falhado (URL inválida ou Model numérico entretanto indisponível) → HTTP 404 padrão Laravel.
 
 ---
 
 ## O teu código não muda
 
 ```php
-// Model — igual
+// Model — igual (Olha! Sem Traits!)
 class Post extends Model
 {
     protected $fillable = ['title'];
@@ -114,7 +99,7 @@ public function show(Post $post): View
     return view('posts.show', compact('post'));
 }
 
-// Blade — igual, mas agora gera a URL com token
+// Blade — igual, mas agora gera a URL com o respetivo token encriptado nativamente
 route('posts.show', $post) // → /posts/BYPWtH2qYos ✅
 ```
 
@@ -124,62 +109,23 @@ route('posts.show', $post) // → /posts/BYPWtH2qYos ✅
 
 | Propriedade | Valor |
 |---|---|
+| Algoritmo | Fully Dynamic Hashids |
 | Comprimento | 11 caracteres |
 | Alfabeto | `A–Z a–z 0–9 _ -` (64 símbolos) |
-| Total de combinações | 64¹¹ ≈ **73 quintiliões** |
-| Fonte de entropia | `random_bytes()` — criptograficamente seguro |
-| Unicidade | Verificada na base de dados antes de guardar |
-| Protecção contra colisões | Tenta de novo até 10× numa colisão (praticamente impossível) |
-
----
-
-## Preencher registos existentes
-
-Se adicionaste `public_id` a uma tabela que já tem dados:
-
-```bash
-php artisan tinker
-```
-
-```php
-$gen = app(\Rotabonita\TokenGenerator::class);
-
-App\Models\Post::whereNull('public_id')->each(function ($post) use ($gen) {
-    $post->public_id = $gen->generateUnique($post);
-    $post->saveQuietly();
-});
-```
-
----
-
-## Avançado: models fora de app/Models/
-
-Se os teus models estão numa directoria não convencional, regista-os manualmente:
-
-```php
-// AppServiceProvider::register()
-$this->app->bind('rotabonita.models', fn() => [
-    \App\Domain\Blog\Post::class,
-    \App\Domain\Commerce\Product::class,
-]);
-```
+| Proteção | Transforma de forma opaca com recurso a Cryptografia |
+| Segurança Modelos | Mantém flexibilidade: Ignora silênciosamente UUIDs ou Custom String Keys |
 
 ---
 
 ## Porquê usar o Rotabonita?
 
 Por padrão, o Laravel expõe os IDs da base de dados directamente nas URLs:
-
-```
-/posts/1   /posts/2   /users/47
-```
-
 Isto é problemático porque:
 - Qualquer utilizador consegue saber **quantos registos** existem
 - É fácil **enumerar recursos** incrementando o número
-- A aplicação parece pouco profissional
+- A aplicação parece menos madura e mais exposta.
 
-O Rotabonita resolve isto **automaticamente e de forma invisível** para o developer.
+O Rotabonita resolve isto em literalmente segundos através da directiva require e sem complexidade de arquitectura adjacente para um Developer.
 
 ---
 

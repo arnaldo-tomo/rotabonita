@@ -12,44 +12,41 @@ use Illuminate\Support\Arr;
 /**
  * Rotabonita URL Generator.
  *
- * Extends Laravel's UrlGenerator to intercept the point where Model
- * instances are converted into URL parameter strings.
- *
- * Normally, `route('posts.show', $post)` calls `$post->getRouteKey()`,
- * which returns the numeric primary key → `/posts/1`.
- *
- * This override checks for a `public_id` attribute on the model first,
- * and if present, uses it instead → `/posts/BYPWtH2qYos`.
- *
- * The developer writes 100% standard Laravel code. Nothing changes for them.
+ * Intercepts Laravel's `route()` calls replacing numeric IDs with public tokens.
  */
 final class RotabonitaUrlGenerator extends UrlGenerator
 {
     /**
-     * Format the array of URL parameters.
-     *
-     * This is called by Laravel internally every time `route()` or `url()`
-     * receives a Model instance as a parameter. We intercept it here to
-     * transparently substitute `public_id` when available.
-     *
-     * @param  mixed  $parameters
-     * @return array
+     * Replaces standard keys natively fetched via getRouteKey() with obfuscated tokens.
      */
     public function formatParameters($parameters): array
     {
         $parameters = Arr::wrap($parameters);
 
+        $generator = null;
+
         foreach ($parameters as $key => $parameter) {
-            if ($parameter instanceof Model && ! empty($parameter->public_id)) {
-                // Model has a public_id → use it transparently.
-                // The developer passes $post as before, URL becomes /posts/BYPWtH2qYos.
-                $parameters[$key] = $parameter->public_id;
+            if ($parameter instanceof Model && $this->shouldObfuscate($parameter)) {
+                $generator ??= app(TokenGenerator::class);
+                // Substitute numeric key for secure Hashids 11-char string
+                $parameters[$key] = $generator->encode($parameter);
             } elseif ($parameter instanceof UrlRoutable) {
-                // Any other UrlRoutable (no public_id) → default behaviour.
+                // Default fallback for unmatched models or non-integer models (e.g UUIDs).
                 $parameters[$key] = $parameter->getRouteKey();
             }
         }
 
         return $parameters;
+    }
+
+    /**
+     * Determines if a model primary key is eligible for Obfuscation.
+     */
+    private function shouldObfuscate(Model $model): bool
+    {
+        // We solely obfuscate integers since Hashids algorithms rely tightly on numbers.
+        return $model->getKeyType() === 'int'
+            && $model->getIncrementing()
+            && !empty($model->getKey());
     }
 }

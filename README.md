@@ -8,12 +8,13 @@
 
 **Rotabonita** is a Laravel 10/11 package that automatically replaces numeric database IDs in your URLs with short, secure, URL-safe public tokens — the same 11-character format YouTube uses for video URLs (e.g. `BYPWtH2qYos`).
 
-It works by intercepting Laravel internally at three points:
-- **Token generation** — assigns a unique `public_id` to every new Eloquent model record automatically
-- **URL generation** — `route('posts.show', $post)` produces `/posts/BYPWtH2qYos` instead of `/posts/1`
-- **Route resolution** — resolves `/posts/BYPWtH2qYos` back to the correct model via `WHERE public_id = ?`
+It works dynamically in memory:
+- **Zero Database Columns** — Does not require adding a `public_id` column to your database.
+- **Zero Migrations** — No artisan commands or schema publishing needed.
+- **URL generation** — `route('posts.show', $post)` dynamically encodes `/1` into `/BYPWtH2qYos`. 
+- **Route resolution** — intercepts incoming `/BYPWtH2qYos` requests and transparently decodes them back to `1` behind the scenes.
 
-**No traits. No model changes. No config publishing. No manual route edits. Just install.**
+**No traits. No model changes. No config publishing. No DB migrations. Just install.**
 
 [![Latest Stable Version](https://poser.pugx.org/arnaldo-tomo/rotabonita/v/stable)](https://packagist.org/packages/arnaldo-tomo/rotabonita)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -30,29 +31,13 @@ It works by intercepting Laravel internally at three points:
 composer require arnaldo-tomo/rotabonita
 ```
 
-Publish and configure the migration for each table you want to protect:
+**That's it. No further configuration, publishing, or migrating required.** 
 
-```bash
-php artisan vendor:publish --tag=rotabonita-migrations
-```
-
-Open the published file in `database/migrations/` and set your table name:
-
-```php
-protected string $table = 'posts'; // ← change this
-```
-
-Run the migration:
-
-```bash
-php artisan migrate
-```
-
-**That's it. No further configuration required.**
+Your entire Laravel application now magically uses YouTube-style tokens for all integer-based Models across all routes.
 
 ---
 
-## What changes
+## What changes?
 
 **Before** installing Rotabonita:
 ```
@@ -74,25 +59,27 @@ Your code stays **exactly the same**. Models, routes, controllers, Blade templat
 
 ## How it works
 
-Rotabonita intercepts Laravel in three places automatically:
+Rotabonita uses deterministic Hashids leveraging your app's secret key (`APP_KEY`) combined with the Model's class name. This guarantees:
+1. Fast, memory-only O(1) performance (no extra DB queries).
+2. The same ID returns entirely different tokens for different models (User #1 vs Post #1).
+3. The token decodes predictably back to the same ID.
 
-**1 — On model creation**
-```php
-Post::create(['title' => 'Hello']); // → public_id = 'BYPWtH2qYos' auto-assigned
-```
+The package intercepts Laravel implicitly in two places:
 
-**2 — On URL generation**
+**1 — On URL generation**
 ```php
+// Transparently intercepts Laravel's UrlGenerator
 route('posts.show', $post); // → /posts/BYPWtH2qYos  (not /posts/1)
 ```
 
-**3 — On route resolution**
-```
-GET /posts/BYPWtH2qYos → SELECT * FROM posts WHERE public_id = 'BYPWtH2qYos'
-GET /posts/1           → SELECT * FROM posts WHERE id = 1  (fallback)
+**2 — On route resolution**
+```php
+// Transparently intercepts RouteMatched Event before Controller receives it
+// Reverts: BYPWtH2qYos → 1
+GET /posts/BYPWtH2qYos → Resolves exactly as if the user accessed /posts/1
 ```
 
-If no record is found → HTTP 404, same as default Laravel behaviour.
+If the record isn't found → HTTP 404, same as default Laravel behaviour.
 
 ---
 
@@ -102,7 +89,7 @@ If no record is found → HTTP 404, same as default Laravel behaviour.
 // Model — unchanged
 class Post extends Model
 {
-    protected $fillable = ['title'];
+    protected $fillable = ['title']; // Look, ma! No Traits!
 }
 
 // Route — unchanged
@@ -114,7 +101,7 @@ public function show(Post $post): View
     return view('posts.show', compact('post'));
 }
 
-// Blade — unchanged, but now generates the token URL
+// Blade — unchanged, but natively generating the token URL
 route('posts.show', $post) // → /posts/BYPWtH2qYos ✅
 ```
 
@@ -124,45 +111,11 @@ route('posts.show', $post) // → /posts/BYPWtH2qYos ✅
 
 | Property | Value |
 |---|---|
+| Strategy | Fully Dynamic Hashids |
 | Length | 11 characters |
 | Alphabet | `A–Z a–z 0–9 _ -` (64 symbols) |
-| Total combinations | 64¹¹ ≈ **73 quintillion** |
-| Entropy source | `random_bytes()` — cryptographically secure |
-| Uniqueness | Verified against the database before saving |
-| Collision guard | Retries up to 10× on the (near-impossible) collision |
-
----
-
-## Backfilling existing records
-
-If you added `public_id` to a table that already has rows:
-
-```bash
-php artisan tinker
-```
-
-```php
-$gen = app(\Rotabonita\TokenGenerator::class);
-
-App\Models\Post::whereNull('public_id')->each(function ($post) use ($gen) {
-    $post->public_id = $gen->generateUnique($post);
-    $post->saveQuietly();
-});
-```
-
----
-
-## Advanced: models outside app/Models/
-
-If your models live in a non-standard directory, register them manually:
-
-```php
-// AppServiceProvider::register()
-$this->app->bind('rotabonita.models', fn() => [
-    \App\Domain\Blog\Post::class,
-    \App\Domain\Commerce\Product::class,
-]);
-```
+| Entropy source | Uses your `APP_KEY` alongside the model's namespace |
+| Edge-case Guard | Silently skips UUIDs & models missing incrementing Keys |
 
 ---
 
